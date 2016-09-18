@@ -1,6 +1,7 @@
 module Main where
 
 import Lib
+import System.Random (getStdGen, split, setStdGen)
 
 type Grid = [[Value]]
 
@@ -29,8 +30,14 @@ valueToMaybe values val
 
 main :: IO ()
 main = do
-  let size     = 3
-      puzzle   = gridToPuzzle size h1
-      solution = solve size puzzle
+  randGen <- getStdGen
 
-  print solution
+  let size     = 3
+      puzzle   = []
+      (g1, g2) = split randGen
+      solver   = randSolver g1
+      solution = solve size puzzle solver
+
+  print $ head solution
+  setStdGen g2
+

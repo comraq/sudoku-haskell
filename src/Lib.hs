@@ -3,10 +3,14 @@
 module Lib
   ( Solution
   , Puzzle
+  , Solver
   , Value
   , getValues
   , solve
-  , empty
+
+  -- Solvers
+  , defaultSolver
+  , randSolver
   ) where
 
 {-
@@ -24,6 +28,9 @@ import Control.Monad.State
 import Control.Monad.Reader
 import Control.Monad.Trans
 
+import System.Random
+import Shuffle (shuffleList)
+
 -- Each Sudoku Cell Contains a Char
 type Value  = Char
 
@@ -38,6 +45,7 @@ type Cell  = (Int, Int)
 -- 2D list of size (dimensions * dimensions)
 type Puzzle   = [[Maybe Value]]
 type Solution = [[Value]]
+type Solver   = Int -> Puzzle -> [(Solution, Options)]
 
 
 valuesRange :: [Value]
@@ -47,7 +55,7 @@ getValues :: Int -> [Value]
 getValues =  (`take` valuesRange) . square
 
 square :: Int -> Int
-square = (id &&& id) >>> uncurry (*)
+square = ((*) &&& id) >>> app
 
 getBlocks :: Int -> [[Cell]]
 getBlocks size =  [[ (row + r * size, col + c * size )
@@ -172,6 +180,8 @@ getCellValues (row, col) = cellOpts >>> (!! row) >>> (!! col)
 {-
  - Assert that the cell to constrain must have the 'val' as one of its
  - possible values.
+ -
+ - Otherwise, solution is invalid and thus 'mzero'.
  -}
 constrainCell :: (MonadReader SudokuEnv m, MonadState Options m, MonadPlus m)
               => Value
@@ -240,17 +250,61 @@ solutions = do
         solveRowFromCol' row col
           | col >= dimensions = return []
           | otherwise         = do
-              possibleVals <- gets $ getCellValues (row, col)
-              value        <- lift . lift $ possibleVals
-
-              (row, col) `setCellValue` value
+              value     <- tryAllValues (row, col)
               solvedRow <- solveRowFromCol' row $ col + 1
               return $ value : solvedRow
 
+tryAllValues :: Cell -> ReaderT SudokuEnv (StateT Options []) Value
+tryAllValues cell = do
+  possibleVals <- gets $ getCellValues cell
+  value        <- lift . lift $ possibleVals
+  cell `setCellValue` value
+  return value
+
+randSolutions :: StdGen -> ReaderT SudokuEnv (StateT Options []) Solution
+randSolutions gen = do
+    env <- ask
+    let dimensions           = dimensions' env
+        cellNumList          = [0 .. square dimensions - 1]
+        (randCellList, _) = shuffleList cellNumList gen
+
+    aListToSolution <$> solveFromCellList dimensions randCellList
+
+  where
+    aListToSolution :: [[(Int, Value)]] -> Solution
+    aListToSolution = map $ map snd
+
+    solveFromCellList :: Int -> [Int] -> ReaderT SudokuEnv (StateT Options []) [[(Int, Value)]]
+    solveFromCellList dimensions = solveByCellList emptyAList
+
+      where
+        getCellFromNum :: Int -> Cell
+        getCellFromNum cellNum =
+          let row = cellNum `div` dimensions
+              col = cellNum `mod` dimensions
+          in  (row, col)
+
+        emptyAList :: [[(Int, Value)]]
+        emptyAList =
+          let emptyRow = zip [0 .. dimensions - 1] (repeat undefined)
+          in  replicate dimensions emptyRow
+
+        solveByCellList :: [[(Int, Value)]]
+                        -> [Int]
+                        -> ReaderT SudokuEnv (StateT Options []) [[(Int, Value)]]
+        solveByCellList result []                 = return result
+        solveByCellList result (cellNum:cellNums) = do
+          let (row, col) = getCellFromNum cellNum
+
+          value <- tryAllValues (row, col)
+          newResult <- solveByCellList result cellNums
+          return $ set2DAList row col value newResult
+
 getSolutions :: Puzzle
+             -> ReaderT SudokuEnv (StateT Options []) Solution
              -> (StateT Options [] Solution -> Options -> b)
              -> Reader SudokuEnv b
-getSolutions puz runStateFunc = do
+getSolutions puz solution runStateFunc = do
     env <- ask
     let values     = values'     env
         blocks     = blocks'     env
@@ -260,7 +314,7 @@ getSolutions puz runStateFunc = do
 
     return . runWithState initOpts . runWithEnv env $ do
       initPuzzle puz
-      solutions
+      solution
 
   where runWithState = flip runStateFunc
         runWithEnv   = flip runReaderT
@@ -271,17 +325,19 @@ initPuzzle puz = sequence_ [ (r, c) `setCellValue` v | (row, r) <- zip puz [0..]
                                                      , (val, c) <- zip row [0..]
                                                      , v <- maybeToList val ]
 
-solveWithOptions :: Int -> Puzzle -> [(Solution, Options)]
-solveWithOptions size puzzle = getSolutions puzzle runStateT `runWithSize` size
+defaultSolver :: Solver
+defaultSolver size puzzle =
+  getSolutions puzzle solutions runStateT `runWithSize` size
+
+randSolver :: StdGen -> Solver
+randSolver gen size puzzle =
+  getSolutions puzzle (randSolutions gen) runStateT `runWithSize` size
 
 runWithSize :: Reader SudokuEnv a -> Int -> a
 runWithSize reader size = runReader reader $ initEnv size
 
-solve :: Int -> Puzzle -> [Solution]
-solve size puzzle = fst <$> solveWithOptions size puzzle
-
-empty :: Int -> [(Solution, Options)]
-empty size = solveWithOptions size []
+solve :: Int -> Puzzle -> Solver -> [Solution]
+solve size puzzle solver = fst <$> solver size puzzle
 
 
 
@@ -320,10 +376,13 @@ replaceInList 0 newX (_:xs) = newX:xs
 replaceInList n newX (x:xs) = x : replaceInList (n - 1) newX xs
 
 replaceOpts :: Int -> Value -> [Cell] -> ValueOptions -> ValueOptions
-replaceOpts 0 value cells (pr:prs) = setAssocList (== value) cells pr : prs
-replaceOpts n value cells (pr:prs) = pr : replaceOpts (n - 1) value cells prs
+replaceOpts = set2DAList
+
+set2DAList :: Eq k => Int -> k -> v -> [[(k, v)]] -> [[(k, v)]]
+set2DAList 0 key value (pr:prs) = setAssocList (== key) value pr : prs
+set2DAList n key value (pr:prs) = pr : set2DAList (n - 1) key value prs
 
 setAssocList :: (k -> Bool) -> v -> [(k, v)] -> [(k, v)]
-setAssocList predicate newVal ((key, value):prs)
+setAssocList predicate newVal (pr@(key, _):prs)
   | predicate key = (key, newVal) : prs
-  | otherwise     = (key, value)  : setAssocList predicate newVal prs
+  | otherwise     = pr : setAssocList predicate newVal prs
