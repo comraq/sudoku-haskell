@@ -1,14 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 
 module Lib
-  ( Solution
-  , Puzzle
-  , Solver
-  , Value
-  , getValues
-  , solve
-
-  -- Solvers
+  ( solve
   , defaultSolver
   , randSolver
   ) where
@@ -31,92 +24,14 @@ import Control.Monad.Trans
 import System.Random
 import Shuffle (shuffleList)
 
--- Each Sudoku Cell Contains a Char
-type Value  = Char
 
-{-
- - Each Cell is of coordinates where:
- - - (0, 0) being the top left
- - - (8, 8) being the bottom right
- -   in a typical 3 x 3 (size 3 sudoku)
- -}
-type Cell  = (Int, Int)
-
--- 2D list of size (dimensions * dimensions)
-type Puzzle   = [[Maybe Value]]
-type Solution = [[Value]]
-type Solver   = Int -> Puzzle -> [(Solution, Options)]
+import Definition
 
 
-valuesRange :: [Value]
-valuesRange =  ['0'..'9'] ++ ['A'..'Z']
 
-getValues :: Int -> [Value]
-getValues =  (`take` valuesRange) . square
 
-square :: Int -> Int
-square = ((*) &&& id) >>> app
 
-getBlocks :: Int -> [[Cell]]
-getBlocks size =  [[ (row + r * size, col + c * size )
-                  | row <- blkSize, col <- blkSize ]
-                  | r   <- blkSize, c   <- blkSize ]
-  where blkSize = [0..size - 1]
-
-blockNum' :: Int -> Cell -> Int
-blockNum' size (r, c) = rowBlkNum + colBlkNum
-  where colBlkNum = c `div` size
-        rowBlkNum = (r `div` size) * size
-
-type CellOptions  = [[[Value]]]         -- list of possible values for each cell
-type ValueOptions = [[(Value, [Cell])]]
-type RowOptions   = ValueOptions        -- list of rows of values mapping to cells
-type ColOptions   = ValueOptions        -- list of cols of values mapping to cells
-type BlkOptions   = ValueOptions        -- list of blks of values mapping to cells
-
-data Options = Options {
-  cellOpts :: CellOptions
-, rowOpts  :: RowOptions
-, colOpts  :: ColOptions
-, blkOpts  :: BlkOptions
-} deriving Show
-
-modifyCellOpts :: (MonadState Options m, MonadPlus m) => (CellOptions -> CellOptions) -> m ()
-modifyCellOpts f = do
-  options <- get
-  put $ options { cellOpts = f $ cellOpts options }
-
-modifyRowOpts :: (MonadState Options m, MonadPlus m) => (RowOptions -> RowOptions) -> m ()
-modifyRowOpts f = do
-  options <- get
-  put $ options { rowOpts = f $ rowOpts options }
-
-modifyColOpts :: (MonadState Options m, MonadPlus m) => (ColOptions -> ColOptions) -> m ()
-modifyColOpts f = do
-  options <- get
-  put $ options { colOpts = f $ colOpts options }
-
-modifyBlkOpts :: (MonadState Options m, MonadPlus m) => (BlkOptions -> BlkOptions) -> m ()
-modifyBlkOpts f = do
-  options <- get
-  put $ options { blkOpts = f $ blkOpts options }
-
-getInitOptions :: [Value] -> [Int] -> [[Cell]] -> Options
-getInitOptions values cellsRange blocks = Options {
-      cellOpts = [[ values       | _     <- cellsRange ]
-                                 | _     <- cellsRange ]
-
-    , rowOpts  = [[ (v, [ (r, c) | c     <- cellsRange ])
-                                 | v     <- values     ]
-                                 | r     <- cellsRange ]
-
-    , colOpts  = [[ (v, [ (r, c) | r     <- cellsRange ])
-                                 | v     <- values     ]
-                                 | c     <- cellsRange ]
-
-    , blkOpts  = [[ (v, block)   | v     <- values     ]
-                                 | block <- blocks     ]
-    }
+------- Contraints and Setting Cell Values -------
 
 setCellValue :: (MonadReader SudokuEnv m, MonadState Options m, MonadPlus m)
              => Cell -> Value -> m ()
@@ -130,12 +45,12 @@ cell@(row, col) `setCellValue` value = do
     guard $ value `elem` remainingVals
 
     env <- ask
-    let size       = size' env
-        dimensions = dimensions' env
-        blocks     = blocks' env
-        values     = values' env
+    let size       = envSize env
+        dimensions = envDimensions env
+        blocks     = envBlocks env
+        values     = envValues env
 
-        blk        = blockNum' size cell
+        blk        = blockNum size cell
         currentBlk = blocks !! blk
         cellsRange = [0 .. dimensions - 1]
 
@@ -189,8 +104,8 @@ constrainCell :: (MonadReader SudokuEnv m, MonadState Options m, MonadPlus m)
               -> m ()
 constrainCell val cell@(row, col) = do
     env <- ask
-    let size = size' env
-        blk  = blockNum' size cell
+    let size = envSize env
+        blk  = blockNum size cell
 
     constrainCellOpts cell val
     constrainOpts     row  val cell modifyRowOpts rowOpts
@@ -226,10 +141,13 @@ constrainCell val cell@(row, col) = do
                                (delete cellToRemove cellsRemain)
         _      -> mzero
 
+
+------- Solutions -------
+
 solutions :: ReaderT SudokuEnv (StateT Options []) Solution
 solutions = do
     env <- ask
-    let dimensions = dimensions' env
+    let dimensions = envDimensions env
 
     solveFromRow dimensions 0
 
@@ -254,17 +172,10 @@ solutions = do
               solvedRow <- solveRowFromCol' row $ col + 1
               return $ value : solvedRow
 
-tryAllValues :: Cell -> ReaderT SudokuEnv (StateT Options []) Value
-tryAllValues cell = do
-  possibleVals <- gets $ getCellValues cell
-  value        <- lift . lift $ possibleVals
-  cell `setCellValue` value
-  return value
-
 randSolutions :: StdGen -> ReaderT SudokuEnv (StateT Options []) Solution
 randSolutions gen = do
     env <- ask
-    let dimensions           = dimensions' env
+    let dimensions           = envDimensions env
         cellNumList          = [0 .. square dimensions - 1]
         (randCellList, _) = shuffleList cellNumList gen
 
@@ -300,73 +211,64 @@ randSolutions gen = do
           newResult <- solveByCellList result cellNums
           return $ set2DAList row col value newResult
 
-getSolutions :: Puzzle
-             -> ReaderT SudokuEnv (StateT Options []) Solution
-             -> (StateT Options [] Solution -> Options -> b)
-             -> Reader SudokuEnv b
-getSolutions puz solution runStateFunc = do
-    env <- ask
-    let values     = values'     env
-        blocks     = blocks'     env
-        dimensions = dimensions' env
-        cellsRange = [0 .. dimensions - 1]
-        initOpts   = getInitOptions values cellsRange blocks
+tryAllValues :: Cell -> ReaderT SudokuEnv (StateT Options []) Value
+tryAllValues cell = do
+  possibleVals <- gets $ getCellValues cell
+  value        <- lift . lift $ possibleVals
+  cell `setCellValue` value
+  return value
 
-    return . runWithState initOpts . runWithEnv env $ do
-      initPuzzle puz
-      solution
 
-  where runWithState = flip runStateFunc
-        runWithEnv   = flip runReaderT
 
-initPuzzle :: (MonadReader SudokuEnv m, MonadState Options m, MonadPlus m)
-           => Puzzle -> m ()
-initPuzzle puz = sequence_ [ (r, c) `setCellValue` v | (row, r) <- zip puz [0..]
-                                                     , (val, c) <- zip row [0..]
-                                                     , v <- maybeToList val ]
+------- Solvers -------
 
 defaultSolver :: Solver
-defaultSolver size puzzle =
-  getSolutions puzzle solutions runStateT `runWithSize` size
+defaultSolver (Puzzle size board) =
+  getSolutions board solutions `runWithSize` size
 
 randSolver :: StdGen -> Solver
-randSolver gen size puzzle =
-  getSolutions puzzle (randSolutions gen) runStateT `runWithSize` size
+randSolver gen (Puzzle size board) =
+  getSolutions board (randSolutions gen) `runWithSize` size
 
 runWithSize :: Reader SudokuEnv a -> Int -> a
 runWithSize reader size = runReader reader $ initEnv size
 
-solve :: Int -> Puzzle -> Solver -> [Solution]
-solve size puzzle solver = fst <$> solver size puzzle
+getSolutions :: Board
+             -> ReaderT SudokuEnv (StateT Options []) Solution
+             -> Reader SudokuEnv [(Solution, Options)]
+getSolutions board solution = do
+    env <- ask
+    let values     = envValues     env
+        blocks     = envBlocks     env
+        dimensions = envDimensions env
+        cellsRange = [0 .. dimensions - 1]
+        initOpts   = getInitOptions values cellsRange blocks
+
+    return . runWithState initOpts . runWithEnv env $ do
+      initBoard board
+      solution
+
+  where runWithState = flip runStateT
+        runWithEnv   = flip runReaderT
+
+initBoard :: (MonadReader SudokuEnv m, MonadState Options m, MonadPlus m)
+           => Board -> m ()
+initBoard board = sequence_ [ (r, c) `setCellValue` v | (row, r) <- zip board [0..]
+                                                      , (val, c) <- zip row   [0..]
+                                                      , v <- maybeToList val ]
+
+solve :: Puzzle -> Solver -> [Solution]
+solve puzzle solver = fst <$> solver puzzle
 
 
 
-data SudokuEnv = SudokuEnv {
-  size'       :: Int
-, dimensions' :: Int
-, blocks'     :: [[Cell]]
-, values'     :: [Value]
-} deriving Show
-
-initEnv :: Int -> SudokuEnv
-initEnv size = SudokuEnv size dim blocks values
-  where
-    dim :: Int
-    dim = square size
-
-    blocks :: [[Cell]]
-    blocks = getBlocks size
-
-    values :: [Value]
-    values = getValues size
 
 
 
-{-
- - Helper Setter Functions
- -
- - TODO: Consider using lens setters
- -}
+------- Helper Setter Functions -------
+
+-- TODO: Consider using lens setters
+
 replaceCellOpts :: Int -> Int -> [Value] -> CellOptions -> CellOptions
 replaceCellOpts 0   col newVals (vs:vss) = replaceInList col newVals vs : vss
 replaceCellOpts row col newVals (vs:vss) = vs : replaceCellOpts (row - 1) col newVals vss

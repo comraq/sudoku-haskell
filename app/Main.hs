@@ -1,11 +1,13 @@
 module Main where
 
-import Lib
 import System.Random (getStdGen, split, setStdGen)
+
+import Lib
+import Definition
 
 type Grid = [[Value]]
 
-h1 :: [[Value]]
+h1 :: Grid
 h1 = [ "4.....8.5"
      , ".3......."
      , "...7....."
@@ -18,7 +20,7 @@ h1 = [ "4.....8.5"
      ]
 
 gridToPuzzle :: Int -> Grid -> Puzzle
-gridToPuzzle size = map $ map (valueToMaybe values)
+gridToPuzzle size = Puzzle size . map (map (valueToMaybe values))
   where
     values :: [Value]
     values = getValues size
@@ -33,11 +35,12 @@ main = do
   randGen <- getStdGen
 
   let size     = 3
-      puzzle   = []
+      board    = []
+      puzzle   = Puzzle size board
+
       (g1, g2) = split randGen
       solver   = randSolver g1
-      solution = solve size puzzle solver
+      solution = solve puzzle solver
 
   print $ head solution
   setStdGen g2
-
