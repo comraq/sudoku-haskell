@@ -15,9 +15,11 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Lib
-                     , Shuffle
+  exposed-modules:     Solver
                      , Definition
+                     , Generator
+                     , Util
+                     , Shuffle
   build-depends:       base >= 4.7 && < 5
                      , mtl
                      , monadplus

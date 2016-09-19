@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 
-module Lib
+module Solver
   ( solve
   , defaultSolver
   , randSolver
@@ -26,6 +26,7 @@ import Shuffle (shuffleList)
 
 
 import Definition
+import Util (replace2DList, set2DAList)
 
 
 
@@ -175,8 +176,8 @@ solutions = do
 randSolutions :: StdGen -> ReaderT SudokuEnv (StateT Options []) Solution
 randSolutions gen = do
     env <- ask
-    let dimensions           = envDimensions env
-        cellNumList          = [0 .. square dimensions - 1]
+    let dimensions        = envDimensions env
+        cellNumList       = [0 .. square dimensions - 1]
         (randCellList, _) = shuffleList cellNumList gen
 
     aListToSolution <$> solveFromCellList dimensions randCellList
@@ -189,11 +190,8 @@ randSolutions gen = do
     solveFromCellList dimensions = solveByCellList emptyAList
 
       where
-        getCellFromNum :: Int -> Cell
-        getCellFromNum cellNum =
-          let row = cellNum `div` dimensions
-              col = cellNum `mod` dimensions
-          in  (row, col)
+        getCell :: Int -> Cell
+        getCell = getCellFromNum dimensions
 
         emptyAList :: [[(Int, Value)]]
         emptyAList =
@@ -205,7 +203,7 @@ randSolutions gen = do
                         -> ReaderT SudokuEnv (StateT Options []) [[(Int, Value)]]
         solveByCellList result []                 = return result
         solveByCellList result (cellNum:cellNums) = do
-          let (row, col) = getCellFromNum cellNum
+          let (row, col) = getCell cellNum
 
           value <- tryAllValues (row, col)
           newResult <- solveByCellList result cellNums
@@ -221,6 +219,9 @@ tryAllValues cell = do
 
 
 ------- Solvers -------
+
+solve :: Puzzle -> Solver -> [Solution]
+solve puzzle solver = fst <$> solver puzzle
 
 defaultSolver :: Solver
 defaultSolver (Puzzle size board) =
@@ -257,34 +258,8 @@ initBoard board = sequence_ [ (r, c) `setCellValue` v | (row, r) <- zip board [0
                                                       , (val, c) <- zip row   [0..]
                                                       , v <- maybeToList val ]
 
-solve :: Puzzle -> Solver -> [Solution]
-solve puzzle solver = fst <$> solver puzzle
-
-
-
-
-
-
-------- Helper Setter Functions -------
-
--- TODO: Consider using lens setters
-
 replaceCellOpts :: Int -> Int -> [Value] -> CellOptions -> CellOptions
-replaceCellOpts 0   col newVals (vs:vss) = replaceInList col newVals vs : vss
-replaceCellOpts row col newVals (vs:vss) = vs : replaceCellOpts (row - 1) col newVals vss
-
-replaceInList :: Int -> a -> [a] -> [a]
-replaceInList 0 newX (_:xs) = newX:xs
-replaceInList n newX (x:xs) = x : replaceInList (n - 1) newX xs
+replaceCellOpts = replace2DList
 
 replaceOpts :: Int -> Value -> [Cell] -> ValueOptions -> ValueOptions
 replaceOpts = set2DAList
-
-set2DAList :: Eq k => Int -> k -> v -> [[(k, v)]] -> [[(k, v)]]
-set2DAList 0 key value (pr:prs) = setAssocList (== key) value pr : prs
-set2DAList n key value (pr:prs) = pr : set2DAList (n - 1) key value prs
-
-setAssocList :: (k -> Bool) -> v -> [(k, v)] -> [(k, v)]
-setAssocList predicate newVal (pr@(key, _):prs)
-  | predicate key = (key, newVal) : prs
-  | otherwise     = pr : setAssocList predicate newVal prs

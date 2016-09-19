@@ -1,7 +1,8 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 import Test.QuickCheck
 
-import qualified Lib as S
+import Definition
+import Solver
 
 import Control.Monad(forM_)
 
@@ -27,7 +28,7 @@ runTests name opts tests =
 main :: IO ()
 main = do
   runTests "default" defaultOpts
-    [ run prop_getValues
+    [ run prop_
     ]
 
 newtype SizeInt = SizeInt Int
@@ -36,6 +37,6 @@ newtype SizeInt = SizeInt Int
 instance Arbitrary SizeInt where
   arbitrary = fmap SizeInt (choose (3, 5) :: Gen Int)
 
-prop_getValues :: SizeInt -> Bool
-prop_getValues (SizeInt n) = length (S.getValues n) == n * n
+prop_ :: SizeInt -> Bool
+prop_ (SizeInt n) = length (getValues n) == n * n
 

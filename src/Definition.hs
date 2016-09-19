@@ -2,7 +2,6 @@
 
 module Definition where
 
-import Control.Arrow
 import Control.Monad.Plus
 import Control.Monad.State
 import Control.Monad.Trans
@@ -23,9 +22,23 @@ type Board  = [[Maybe Value]]
 data Puzzle = Puzzle {
   gameSize  :: Int
 , gameBoard :: Board
-}
+} deriving Show
+
 type Solution = [[Value]]
 type Solver   = Puzzle -> [(Solution, Options)]
+
+type Grid = [[Value]]
+
+gridToPuzzle :: Int -> Grid -> Puzzle
+gridToPuzzle size = Puzzle size . map (map (valueToMaybe values))
+  where
+    values :: [Value]
+    values = getValues size
+
+valueToMaybe :: [Value] -> Value -> Maybe Value
+valueToMaybe values val
+    | val `elem` values = Just val
+    | otherwise         = Nothing
 
 data SudokuEnv = SudokuEnv {
   envSize       :: Int
@@ -52,8 +65,14 @@ valuesRange =  ['0'..'9'] ++ ['A'..'Z']
 getValues :: Int -> [Value]
 getValues =  (`take` valuesRange) . square
 
+getCellFromNum :: Int -> Int -> Cell
+getCellFromNum dimensions cellNum =
+  let row = cellNum `div` dimensions
+      col = cellNum `mod` dimensions
+  in  (row, col)
+
 square :: Int -> Int
-square = ((*) &&& id) >>> app
+square = (^2)
 
 getBlocks :: Int -> [[Cell]]
 getBlocks size =  [[ (row + r * size, col + c * size)

@@ -2,10 +2,9 @@ module Main where
 
 import System.Random (getStdGen, split, setStdGen)
 
-import Lib
 import Definition
-
-type Grid = [[Value]]
+import Solver
+import Generator
 
 h1 :: Grid
 h1 = [ "4.....8.5"
@@ -19,28 +18,25 @@ h1 = [ "4.....8.5"
      , "1.4......"
      ]
 
-gridToPuzzle :: Int -> Grid -> Puzzle
-gridToPuzzle size = Puzzle size . map (map (valueToMaybe values))
-  where
-    values :: [Value]
-    values = getValues size
-
-valueToMaybe :: [Value] -> Value -> Maybe Value
-valueToMaybe values val
-    | val `elem` values = Just val
-    | otherwise         = Nothing
-
 main :: IO ()
 main = do
-  randGen <- getStdGen
+    gen <- getStdGen
+    let size       = 3
+        (g1, g2)   = split gen
+        norm       = generatePuzzle g1 size Normal
+        hard       = generatePuzzle g2 size Hard
+        solver     = defaultSolver
 
-  let size     = 3
-      board    = []
-      puzzle   = Puzzle size board
+    putStrLn $ "Normal Puzzle: " ++ show norm
+    putStrLn $ "Count of Nothing: " ++ show (count norm)
+    print    $ head $ solve norm solver
 
-      (g1, g2) = split randGen
-      solver   = randSolver g1
-      solution = solve puzzle solver
+    putStrLn $ "Hard Puzzle: " ++ show hard
+    putStrLn $ "Count of Nothing: " ++ show (count hard)
+    print    $ head $ solve hard solver
 
-  print $ head solution
-  setStdGen g2
+    setStdGen g2
+
+  where
+    count :: Puzzle -> Int
+    count (Puzzle _ board) = length . filter (== Nothing) . concat $ board
